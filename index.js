@@ -40,10 +40,12 @@ const userSchema = new mongoose.Schema({
 userSchema.pre('save', async function (next){
     const user = this;
 
+    // Verifying the password has not been modified
     if(!user.isModified('password')) {
         return next();
     }
 
+    // Hashing the user's password
     const salt = await bcrypt.genSalt(10);
     const hash = await bcrypt.hash(user.password, salt);
 
@@ -54,6 +56,7 @@ userSchema.pre('save', async function (next){
 
 const User = mongoose.model('User', userSchema);
 
+// Route for creating user
 app.post('/register', async (req, res) => {
     try{
         const {email, password, role} = req.body;
@@ -73,6 +76,7 @@ app.post('/register', async (req, res) => {
     }
 });
 
+// Route for logging in user
 app.post('/login', async (req, res) => {
     try{
         const {email, password} = req.body;
@@ -85,6 +89,7 @@ app.post('/login', async (req, res) => {
             });
         }
 
+        // Checking that passwords match
         const isMatch = await bcrypt.compare(password, user.password);
 
         if(!isMatch){
@@ -94,8 +99,18 @@ app.post('/login', async (req, res) => {
             });
         }
 
-        const token = jwt.sign({email: user.email, role: user.role}, 'secret');
+        // Changed from userId: user._id to email: user.email because user information is not created with their id
+        const token = jwt.sign({email: user.email, role: user.role}, 'secret', {
+            expiresIn: '10d'
+        });
+        const cookieOptions = {
+            expires: new Date(
+                Date.now() + 10 * 24 * 60 * 60 * 1000
+            ),
+            httpOnly: true
+        };
 
+        res.cookie('jwt', token, cookieOptions);
         res.json({
             success: true,
             token,
@@ -109,9 +124,52 @@ app.post('/login', async (req, res) => {
     }
 });
 
+// Route for accessing protected resources
 app.get('/protected', authenticateUser, authorizeUser(['admin']), (req, res) => {
     res.json({
         success: true,
         message: 'You have accessed a protected resource',
     });
+});
+
+// In-memory storage for invalid tokens
+const invalidTokens = new Set();
+
+// // Route for logging out a user
+app.post('/logout', (req, res) => {
+    // Get the token from the request header
+    const token = req.headers.authorization;
+  
+    // Error response if token is not provided
+    if (!token) {
+        return res.status(401).json({
+            success: false,
+            message: 'Token not provided',
+        });
+    }
+  
+    try {
+        // Verify and decode the JWT token
+        const decoded = jwt.verify(token, 'secret');
+
+        // Add the decoded token to the list of invalid tokens
+        invalidTokens.add(decoded.email);
+
+        // clearing JWT cookie
+        res.cookie('jwt', '', {
+        expires: new Date(0)
+        });
+  
+        // Return a response indicating successful logout
+        res.status(200).json({
+            success: true,
+            message: 'Logout successful',
+        });
+    } catch (error) {
+        // If token is invalid, return an error response
+        res.status(401).json({
+            success: false,
+            message: 'Invalid token',
+        });
+    }
 });
